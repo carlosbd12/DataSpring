@@ -1,6 +1,6 @@
 package org.example.dataspring.service;
 
-import org.example.dataspring.dashboard.ChartPointResponse;
+import org.example.dataspring.dto.dashboard.ChartPointResponse;
 import org.example.dataspring.model.MeasurementRecord;
 import org.springframework.stereotype.Service;
 
