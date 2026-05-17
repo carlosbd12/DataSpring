@@ -6,7 +6,8 @@ import {
     getDayOfWeekChart,
     getHourlyChart,
     getLoadTypeChart,
-    getWeekStatusChart
+    getWeekStatusChart,
+    uploadDataset
 } from "../api/dashboardApi";
 import DashboardBarChart from "../components/dashboard/DashboardBarChart";
 import DashboardHeader from "../components/dashboard/DashboardHeader";
@@ -36,6 +37,7 @@ export default function DashboardPage() {
 
     const [loading, setLoading] = useState(true);
     const [chartsLoading, setChartsLoading] = useState(false);
+    const [uploading, setUploading] = useState(false);
     const [error, setError] = useState("");
 
     useEffect(() => {
@@ -155,6 +157,22 @@ export default function DashboardPage() {
         }
     };
 
+    const handleFileUpload = async (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        try {
+            setUploading(true);
+            setError("");
+            await uploadDataset(file);
+            await loadInitialDashboard();
+        } catch (err) {
+            setError(readError(err, "Error al subir el dataset. Asegúrate de que el formato sea correcto."));
+        } finally {
+            setUploading(false);
+        }
+    };
+
     if (loading) {
         return (
             <div className="dashboard-page">
@@ -197,6 +215,25 @@ export default function DashboardPage() {
                         max={datasetInfo?.lastAvailableDate || ""}
                         onChange={(e) => setSelectedDate(e.target.value)}
                     />
+                </div>
+
+                <div className="upload-section">
+                    <label htmlFor="csv-upload" className="upload-button">
+                        {uploading ? "Subiendo..." : "Subir nuevo dataset (CSV)"}
+                    </label>
+                    <input
+                        id="csv-upload"
+                        type="file"
+                        accept=".csv"
+                        onChange={handleFileUpload}
+                        disabled={uploading}
+                        style={{ display: "none" }}
+                    />
+                    {datasetInfo?.fileName && (
+                        <span className="dataset-name">
+                            Archivo actual: <strong>{datasetInfo.fileName}</strong>
+                        </span>
+                    )}
                 </div>
 
                 {chartsLoading ? <span className="loading-pill">Actualizando gráfico...</span> : null}

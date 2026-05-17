@@ -1,9 +1,3 @@
-CREATE DATABASE IF NOT EXISTS datasenseweb;
-
-USE datasenseweb;
-
-DROP TABLE IF EXISTS users;
-
 CREATE TABLE usuarios (
                           id BIGINT NOT NULL AUTO_INCREMENT,
                           username VARCHAR(100) NOT NULL,
@@ -39,4 +33,3 @@ INSERT INTO usuarios (
              NULL
          );
 
-SELECT * FROM usuarios;

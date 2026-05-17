@@ -7,7 +7,9 @@ import org.example.dataspring.entity.Role;
 import org.example.dataspring.entity.User;
 import org.example.dataspring.repository.UserRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -71,6 +73,10 @@ public class DashboardService {
         response.setFirstAvailableDate(stringify(energyAnalyticsService.getFirstAvailableDate()));
         response.setLastAvailableDate(stringify(energyAnalyticsService.getLastAvailableDate()));
         return response;
+    }
+
+    public void updateDataset(MultipartFile file) throws IOException {
+        energyAnalyticsService.updateDataset(file);
     }
 
     private String mapRoleLabel(Role role) {

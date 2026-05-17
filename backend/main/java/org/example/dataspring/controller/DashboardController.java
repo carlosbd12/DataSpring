@@ -6,9 +6,12 @@ import org.example.dataspring.dto.dashboard.DatasetInfoResponse;
 import org.example.dataspring.entity.User;
 import org.example.dataspring.repository.UserRepository;
 import org.example.dataspring.service.DashboardService;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
 import java.time.LocalDate;
 import java.util.List;
 
@@ -71,5 +74,11 @@ public class DashboardController {
     @GetMapping("/dataset")
     public DatasetInfoResponse getDatasetInfo() {
         return dashboardService.getDatasetInfo();
+    }
+
+    @PostMapping("/upload")
+    public ResponseEntity<DatasetInfoResponse> uploadDataset(@RequestParam("file") MultipartFile file) throws IOException {
+        dashboardService.updateDataset(file);
+        return ResponseEntity.ok(dashboardService.getDatasetInfo());
     }
 }

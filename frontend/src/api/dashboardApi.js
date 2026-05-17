@@ -42,3 +42,14 @@ export async function getWeekStatusChart() {
     const response = await client.get("/dashboard/week-status");
     return Array.isArray(response.data) ? response.data : [];
 }
+
+export async function uploadDataset(file) {
+    const formData = new FormData();
+    formData.append("file", file);
+    const response = await client.post("/dashboard/upload", formData, {
+        headers: {
+            "Content-Type": "multipart/form-data"
+        }
+    });
+    return response.data;
+}

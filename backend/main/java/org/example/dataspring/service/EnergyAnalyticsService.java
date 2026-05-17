@@ -1,56 +1,54 @@
 package org.example.dataspring.service;
 
 import org.example.dataspring.dto.dashboard.ChartPointResponse;
-import org.example.dataspring.model.MeasurementRecord;
+import org.example.dataspring.repository.MeasurementRepository;
 import org.springframework.stereotype.Service;
+import org.springframework.web.multipart.MultipartFile;
 
+import java.io.IOException;
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
 @Service
 public class EnergyAnalyticsService {
+
+    private static final String USAGE_KWH = "USAGE_KWH";
+    private static final String CO2 = "CO2";
 
     private static final List<String> DAY_ORDER = List.of(
             "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"
     );
 
-    private final CsvEnergyDataService csvEnergyDataService;
+    private static final List<String> LOAD_TYPE_ORDER = List.of(
+            "Light Load", "Medium Load", "Maximum Load"
+    );
 
-    public EnergyAnalyticsService(CsvEnergyDataService csvEnergyDataService) {
-        this.csvEnergyDataService = csvEnergyDataService;
+    private final MeasurementRepository measurementRepository;
+
+    public EnergyAnalyticsService(MeasurementRepository measurementRepository) {
+        this.measurementRepository = measurementRepository;
     }
 
     public long getTotalMeasurements() {
-        return records().size();
+        return measurementRepository.countByTypeCode(USAGE_KWH);
     }
 
     public double getAverageConsumption() {
-        return records().stream()
-                .mapToDouble(MeasurementRecord::getUsageKwh)
-                .average()
-                .orElse(0.0);
+        return nullSafe(measurementRepository.averageByTypeCode(USAGE_KWH));
     }
 
     public double getMinConsumption() {
-        return records().stream()
-                .mapToDouble(MeasurementRecord::getUsageKwh)
-                .min()
-                .orElse(0.0);
+        return toDouble(measurementRepository.minByTypeCode(USAGE_KWH));
     }
 
     public double getMaxConsumption() {
-        return records().stream()
-                .mapToDouble(MeasurementRecord::getUsageKwh)
-                .max()
-                .orElse(0.0);
+        return toDouble(measurementRepository.maxByTypeCode(USAGE_KWH));
     }
 
     public double getTotalCo2() {
-        return records().stream()
-                .mapToDouble(MeasurementRecord::getCo2)
-                .sum();
+        return toDouble(measurementRepository.sumByTypeCode(CO2));
     }
 
     public double getPeakConsumption() {
@@ -58,17 +56,13 @@ public class EnergyAnalyticsService {
     }
 
     public LocalDate getFirstAvailableDate() {
-        return records().stream()
-                .map(record -> record.getTimestamp().toLocalDate())
-                .min(LocalDate::compareTo)
-                .orElse(null);
+        LocalDateTime firstTimestamp = measurementRepository.findFirstTimestamp();
+        return firstTimestamp != null ? firstTimestamp.toLocalDate() : null;
     }
 
     public LocalDate getLastAvailableDate() {
-        return records().stream()
-                .map(record -> record.getTimestamp().toLocalDate())
-                .max(LocalDate::compareTo)
-                .orElse(null);
+        LocalDateTime lastTimestamp = measurementRepository.findLastTimestamp();
+        return lastTimestamp != null ? lastTimestamp.toLocalDate() : null;
     }
 
     public String getDatasetInfoText() {
@@ -83,28 +77,22 @@ public class EnergyAnalyticsService {
     }
 
     public String getCurrentFileName() {
-        return csvEnergyDataService.getCurrentFileName();
+        return "Base de datos MySQL";
+    }
+
+    public void updateDataset(MultipartFile file) throws IOException {
+        throw new UnsupportedOperationException("La carga de CSV no esta disponible usando MySQL como fuente principal");
     }
 
     public List<ChartPointResponse> getHourlyChart(LocalDate date) {
-        Map<Integer, Double> usageByHour;
-
-        if (date == null) {
-            usageByHour = records().stream()
-                    .collect(Collectors.groupingBy(
-                            MeasurementRecord::getHour,
-                            TreeMap::new,
-                            Collectors.summingDouble(MeasurementRecord::getUsageKwh)
-                    ));
-        } else {
-            usageByHour = records().stream()
-                    .filter(record -> record.getTimestamp().toLocalDate().equals(date))
-                    .collect(Collectors.groupingBy(
-                            MeasurementRecord::getHour,
-                            TreeMap::new,
-                            Collectors.summingDouble(MeasurementRecord::getUsageKwh)
-                    ));
-        }
+        List<Object[]> rows = date == null
+                ? measurementRepository.sumByHour(USAGE_KWH)
+                : measurementRepository.sumByHourAndTimestampBetween(
+                        USAGE_KWH,
+                        date.atStartOfDay(),
+                        date.plusDays(1).atStartOfDay()
+                );
+        Map<Integer, Double> usageByHour = numberKeyedMap(rows);
 
         List<ChartPointResponse> result = new ArrayList<>();
         for (int hour = 0; hour < 24; hour++) {
@@ -114,39 +102,28 @@ public class EnergyAnalyticsService {
     }
 
     public List<ChartPointResponse> getLoadTypeChart(String mode) {
-        return buildGroupedChart(
-                MeasurementRecord::getLoadType,
-                MeasurementRecord::getUsageKwh,
-                mode,
-                List.of("Light Load", "Medium Load", "Maximum Load")
-        );
+        List<Object[]> rows = isAverageMode(mode)
+                ? measurementRepository.averageByEstimatedLoadType(USAGE_KWH)
+                : measurementRepository.sumByEstimatedLoadType(USAGE_KWH);
+        return orderedLabelChart(rows, LOAD_TYPE_ORDER);
     }
 
     public List<ChartPointResponse> getDayOfWeekChart(String mode) {
-        return buildGroupedChart(
-                MeasurementRecord::getDayOfWeek,
-                MeasurementRecord::getUsageKwh,
-                mode,
-                DAY_ORDER
-        );
+        List<Object[]> rows = isAverageMode(mode)
+                ? measurementRepository.averageByDayOfWeek(USAGE_KWH)
+                : measurementRepository.sumByDayOfWeek(USAGE_KWH);
+        return orderedDayOfWeekChart(rows);
     }
 
     public List<ChartPointResponse> getCo2Chart(String mode) {
-        return buildGroupedChart(
-                MeasurementRecord::getDayOfWeek,
-                MeasurementRecord::getCo2,
-                mode,
-                DAY_ORDER
-        );
+        List<Object[]> rows = isAverageMode(mode)
+                ? measurementRepository.averageByDayOfWeek(CO2)
+                : measurementRepository.sumByDayOfWeek(CO2);
+        return orderedDayOfWeekChart(rows);
     }
 
     public List<ChartPointResponse> getWeekStatusChart() {
-        Map<String, Double> grouped = records().stream()
-                .collect(Collectors.groupingBy(
-                        record -> normalizeWeekStatus(record.getWeekStatus()),
-                        LinkedHashMap::new,
-                        Collectors.summingDouble(MeasurementRecord::getUsageKwh)
-                ));
+        Map<String, Double> grouped = labelKeyedMap(measurementRepository.sumByWeekStatus(USAGE_KWH));
 
         return List.of(
                 new ChartPointResponse("Laborable", grouped.getOrDefault("Laborable", 0.0)),
@@ -154,47 +131,54 @@ public class EnergyAnalyticsService {
         );
     }
 
-    private List<ChartPointResponse> buildGroupedChart(Function<MeasurementRecord, String> labelExtractor,
-                                                       Function<MeasurementRecord, Double> valueExtractor,
-                                                       String mode,
-                                                       List<String> order) {
-        boolean average = "average".equalsIgnoreCase(mode);
-
-        Map<String, Double> aggregated;
-        if (average) {
-            aggregated = records().stream()
-                    .collect(Collectors.groupingBy(
-                            labelExtractor,
-                            Collectors.averagingDouble(record -> valueExtractor.apply(record))
-                    ));
-        } else {
-            aggregated = records().stream()
-                    .collect(Collectors.groupingBy(
-                            labelExtractor,
-                            Collectors.summingDouble(record -> valueExtractor.apply(record))
-                    ));
-        }
-
+    private List<ChartPointResponse> orderedLabelChart(List<Object[]> rows, List<String> order) {
+        Map<String, Double> grouped = labelKeyedMap(rows);
         List<ChartPointResponse> result = new ArrayList<>();
         for (String label : order) {
-            result.add(new ChartPointResponse(label, aggregated.getOrDefault(label, 0.0)));
+            result.add(new ChartPointResponse(label, grouped.getOrDefault(label, 0.0)));
         }
         return result;
     }
 
-    private String normalizeWeekStatus(String weekStatus) {
-        if (weekStatus == null) {
-            return "Desconocido";
+    private List<ChartPointResponse> orderedDayOfWeekChart(List<Object[]> rows) {
+        Map<Integer, Double> grouped = numberKeyedMap(rows);
+        List<ChartPointResponse> result = new ArrayList<>();
+        for (int index = 0; index < DAY_ORDER.size(); index++) {
+            int mysqlDayOfWeek = index == 6 ? 1 : index + 2;
+            result.add(new ChartPointResponse(DAY_ORDER.get(index), grouped.getOrDefault(mysqlDayOfWeek, 0.0)));
         }
-
-        return switch (weekStatus.trim().toLowerCase(Locale.ROOT)) {
-            case "weekday" -> "Laborable";
-            case "weekend" -> "Fin de semana";
-            default -> weekStatus;
-        };
+        return result;
     }
 
-    private List<MeasurementRecord> records() {
-        return csvEnergyDataService.getRecords();
+    private Map<Integer, Double> numberKeyedMap(List<Object[]> rows) {
+        Map<Integer, Double> result = new HashMap<>();
+        for (Object[] row : rows) {
+            result.put(((Number) row[0]).intValue(), toDouble(row[1]));
+        }
+        return result;
+    }
+
+    private Map<String, Double> labelKeyedMap(List<Object[]> rows) {
+        Map<String, Double> result = new HashMap<>();
+        for (Object[] row : rows) {
+            result.put(String.valueOf(row[0]), toDouble(row[1]));
+        }
+        return result;
+    }
+
+    private boolean isAverageMode(String mode) {
+        return "average".equalsIgnoreCase(mode);
+    }
+
+    private double nullSafe(Double value) {
+        return value != null ? value : 0.0;
+    }
+
+    private double toDouble(Object value) {
+        return value instanceof Number number ? number.doubleValue() : 0.0;
+    }
+
+    private double toDouble(BigDecimal value) {
+        return value != null ? value.doubleValue() : 0.0;
     }
 }
