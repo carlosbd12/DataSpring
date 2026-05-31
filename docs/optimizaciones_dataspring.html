@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Plan de mejoras y optimizacion - DataSpring</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            color: #1f2933;
+            line-height: 1.45;
+            margin: 40px;
+        }
+        h1 {
+            color: #12324a;
+            font-size: 28px;
+            margin-bottom: 6px;
+        }
+        h2 {
+            color: #1f4e79;
+            border-bottom: 1px solid #d7dee8;
+            padding-bottom: 4px;
+            margin-top: 28px;
+        }
+        h3 {
+            color: #2f5f8f;
+            margin-top: 20px;
+        }
+        .meta {
+            color: #52616f;
+            font-size: 13px;
+            margin-bottom: 28px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 12px 0 22px;
+            font-size: 13px;
+        }
+        th {
+            background: #e9f1f8;
+            color: #16324f;
+            font-weight: bold;
+        }
+        th, td {
+            border: 1px solid #c7d2df;
+            padding: 8px;
+            vertical-align: top;
+        }
+        .priority {
+            font-weight: bold;
+            color: #7a3416;
+        }
+        .path {
+            font-family: Consolas, monospace;
+            font-size: 12px;
+            color: #374151;
+        }
+        ul {
+            margin-top: 6px;
+        }
+    </style>
+</head>
+<body>
+<h1>Plan de mejoras y optimizacion del codigo - DataSpring</h1>
+<div class="meta">Documento de analisis tecnico. No incluye implementacion de codigo.</div>
+
+<h2>1. Resumen ejecutivo</h2>
+<p>
+    La aplicacion DataSpring combina un backend Spring Boot con un frontend React/Vite. El principal margen de mejora
+    esta en la reduccion de consultas repetidas, la simplificacion de las llamadas HTTP del dashboard, la alineacion
+    de las fuentes de datos usadas por dashboard e informes, y la mejora de seguridad/concurrencia en servicios que
+    actualmente mantienen estado en memoria.
+</p>
+<p>
+    La prioridad recomendada es empezar por el backend del dashboard, porque concentra el mayor volumen de consultas
+    y afecta directamente al tiempo de carga percibido por el usuario. Despues conviene abordar los informes, ya que
+    hoy dependen de una capa CSV/cache distinta de la fuente MySQL usada por el dashboard.
+</p>
+
+<h2>2. Orden recomendado de actuacion</h2>
+<table>
+    <thead>
+    <tr>
+        <th>Orden</th>
+        <th>Mejora</th>
+        <th>Impacto esperado</th>
+        <th>Complejidad</th>
+        <th>Prioridad</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr>
+        <td>1</td>
+        <td>Unificar las metricas del resumen del dashboard en una consulta agregada</td>
+        <td>Reduce varias consultas SQL por carga del dashboard</td>
+        <td>Media</td>
+        <td class="priority">Alta</td>
+    </tr>
+    <tr>
+        <td>2</td>
+        <td>Crear un endpoint inicial unico para el dashboard</td>
+        <td>Reduce llamadas HTTP y simplifica el frontend</td>
+        <td>Media</td>
+        <td class="priority">Alta</td>
+    </tr>
+    <tr>
+        <td>3</td>
+        <td>Evitar recargas duplicadas de graficos en React</td>
+        <td>Elimina peticiones innecesarias tras la carga inicial</td>
+        <td>Baja</td>
+        <td class="priority">Alta</td>
+    </tr>
+    <tr>
+        <td>4</td>
+        <td>Alinear informes con MySQL y abandonar calculos pesados en memoria</td>
+        <td>Mejora consistencia, escalabilidad y mantenibilidad</td>
+        <td>Media/Alta</td>
+        <td class="priority">Alta</td>
+    </tr>
+    <tr>
+        <td>5</td>
+        <td>Persistir informes o hacer thread-safe la coleccion actual</td>
+        <td>Evita errores con usuarios concurrentes y perdida de datos</td>
+        <td>Media</td>
+        <td class="priority">Media/Alta</td>
+    </tr>
+    <tr>
+        <td>6</td>
+        <td>Anadir indices compuestos orientados a las consultas reales</td>
+        <td>Mejora rendimiento en filtros por tipo y fecha</td>
+        <td>Baja/Media</td>
+        <td class="priority">Media</td>
+    </tr>
+    <tr>
+        <td>7</td>
+        <td>Eliminar dependencias, campos e imports no usados</td>
+        <td>Reduce ruido y mejora legibilidad</td>
+        <td>Baja</td>
+        <td class="priority">Media</td>
+    </tr>
+    <tr>
+        <td>8</td>
+        <td>Normalizar estados de carga y errores en el frontend</td>
+        <td>Mejora UX y reduce duplicacion</td>
+        <td>Baja/Media</td>
+        <td class="priority">Media</td>
+    </tr>
+    </tbody>
+</table>
+
+<h2>3. Mejoras detalladas</h2>
+
+<h3>3.1. Unificar las metricas del resumen del dashboard</h3>
+<p>
+    Una de las primeras mejoras que conviene abordar esta relacionada con la forma en la que se construye el resumen
+    del dashboard. En el estado actual, el servicio va solicitando cada indicador de forma independiente: primero el
+    numero total de mediciones, despues el consumo medio, mas tarde el minimo, el maximo, el total de emisiones de CO2
+    y finalmente las fechas disponibles del conjunto de datos. Aunque esta estructura es facil de entender, tiene un
+    inconveniente importante: cada dato provoca una consulta separada contra la base de datos.
+</p>
+<p class="path">
+    Referencias: backend/main/java/org/example/dataspring/service/DashboardService.java,
+    backend/main/java/org/example/dataspring/service/EnergyAnalyticsService.java
+</p>
+<p>
+    Esta situacion no suele ser problematica con pocos registros, pero se vuelve menos eficiente a medida que crece el
+    volumen de mediciones o aumenta el numero de usuarios que acceden al dashboard. La solucion mas adecuada seria
+    agrupar estas metricas en una unica consulta agregada. Esa consulta podria devolver en bloque valores como el
+    total de registros, el promedio, el minimo, el maximo, el total de CO2, la primera fecha registrada y la ultima
+    fecha registrada. A partir de ese resultado unico, el servicio construiria el DTO que ya consume el frontend.
+</p>
+<p>
+    El principal beneficio de esta mejora es que reduce la latencia de la pantalla inicial y disminuye la carga sobre
+    MySQL. Tambien mejora la legibilidad del codigo, porque el resumen deja de depender de una cadena de llamadas
+    independientes y pasa a apoyarse en un unico objeto de estadisticas. Es una optimizacion prioritaria porque afecta
+    directamente a la experiencia inicial del usuario.
+</p>
+
+<h3>3.2. Evitar el calculo duplicado del pico de consumo</h3>
+<p>
+    El pico de consumo representa, en la practica, el valor maximo de consumo registrado. Sin embargo, en el flujo
+    actual se obtiene por un camino separado: primero se calcula el consumo maximo y despues se vuelve a pedir el pico,
+    que internamente consulta de nuevo ese mismo valor. Aunque esta duplicacion pueda parecer menor, sigue siendo una
+    consulta innecesaria dentro de una ruta que se ejecuta cada vez que se carga el dashboard.
+</p>
+<p>
+    Lo mas razonable es tratar el pico de consumo como un alias del maximo ya calculado. Si se aplica la mejora anterior
+    y se obtiene un bloque unico de estadisticas, el pico se puede rellenar directamente con el valor maximo incluido
+    en ese resultado. De esta forma se elimina trabajo repetido y, ademas, el codigo expresa mejor el significado real
+    de la metrica.
+</p>
+
+<h3>3.3. Crear un endpoint inicial unico para el dashboard</h3>
+<p>
+    En el frontend, la carga inicial del dashboard se resuelve lanzando varias peticiones en paralelo. Se solicita el
+    resumen, la informacion del dataset, el grafico horario, el grafico por tipo de carga, el grafico por dia de la
+    semana, el grafico de CO2 y el grafico de laborables frente a fines de semana. El uso de Promise.all evita que las
+    llamadas se hagan una detras de otra, pero no elimina la complejidad de coordinar muchas peticiones ni el coste de
+    procesarlas en el backend.
+</p>
+<p class="path">
+    Referencia: frontend/src/pages/DashboardPage.jsx
+</p>
+<p>
+    Una mejora clara seria crear un endpoint inicial especifico, por ejemplo /api/dashboard/initial, que devuelva toda
+    la informacion necesaria para pintar la primera vista. Este endpoint podria incluir el resumen, la informacion del
+    dataset y las series iniciales de los graficos. Los endpoints individuales no tendrian por que desaparecer, ya que
+    seguirian siendo utiles cuando el usuario cambie un filtro concreto o alterne entre total y promedio en un grafico.
+</p>
+<p>
+    Con este enfoque, React dejaria de tener que coordinar tantas respuestas independientes durante la primera carga.
+    El codigo del componente seria mas sencillo, el tratamiento de errores seria mas uniforme y el backend tendria mas
+    margen para optimizar internamente las consultas sin cambiar la forma en la que el frontend consume los datos. Esta
+    mejora tiene impacto tanto en rendimiento como en mantenibilidad.
+</p>
+
+<h3>3.4. Evitar recargas duplicadas del grafico horario</h3>
+<p>
+    Otro punto a revisar en el dashboard es la carga del grafico horario. Durante la inicializacion se solicita un
+    grafico horario sin fecha concreta, pero despues, cuando llega la informacion del dataset, se establece como fecha
+    seleccionada la primera fecha disponible. Ese cambio de estado activa un efecto de React que vuelve a solicitar el
+    grafico horario, esta vez filtrado por fecha. El resultado es que se realiza una llamada que probablemente no aporta
+    valor real al usuario.
+</p>
+<p>
+    La forma correcta de resolverlo es decidir desde el principio que dato se quiere mostrar en la primera pantalla.
+    Si el comportamiento deseado es mostrar el consumo por hora de la primera fecha disponible, entonces la carga inicial
+    deberia pedir directamente ese dato. Si, por el contrario, se quiere mostrar una vision global por hora, entonces
+    el cambio de fecha inicial no deberia disparar automaticamente una segunda peticion.
+</p>
+<p>
+    Esta optimizacion reduce llamadas innecesarias, evita estados de carga intermedios y hace que el componente sea mas
+    predecible. Tambien ayuda a que el usuario perciba la pantalla como mas estable, porque se reducen los refrescos de
+    datos inmediatamente despues de la primera renderizacion.
+</p>
+
+<h3>3.5. Alinear informes con MySQL y eliminar dependencia funcional del CSV/cache</h3>
+<p>
+    La diferencia entre la fuente de datos del dashboard y la de los informes es una de las cuestiones arquitectonicas
+    mas importantes. El dashboard trabaja con MeasurementRepository, es decir, con la tabla principal de mediciones en
+    MySQL. En cambio, el servicio de informes se apoya en CsvEnergyDataService, que mantiene registros en memoria y
+    conserva una logica heredada de carga desde CSV. Esta separacion puede provocar que dos partes de la aplicacion
+    calculen resultados sobre origenes distintos.
+</p>
+<p class="path">
+    Referencias: backend/main/java/org/example/dataspring/service/ReportService.java,
+    backend/main/java/org/example/dataspring/service/CsvEnergyDataService.java
+</p>
+<p>
+    Para evitar inconsistencias, los informes deberian calcularse usando la misma fuente de verdad que el dashboard.
+    Esto implica mover la generacion de informes hacia consultas sobre MySQL mediante repositorios JPA. Los informes
+    diarios, semanales y mensuales pueden resolverse con filtros por rango de fechas y agregaciones SQL. Del mismo modo,
+    el informe de eficiencia puede obtener el mejor registro ordenando por consumo ascendente o consultando directamente
+    el minimo relevante.
+</p>
+<p>
+    Este cambio tiene un beneficio doble. Por un lado, garantiza que dashboard e informes hablen siempre de los mismos
+    datos. Por otro, evita cargar y recorrer grandes listas en memoria cada vez que se genera un informe. A medio plazo,
+    esta es una mejora clave para que la aplicacion pueda crecer sin arrastrar una doble logica de datos.
+</p>
+
+<h3>3.6. Persistir informes o hacer thread-safe la coleccion actual</h3>
+<p>
+    Actualmente los informes generados se almacenan en una lista en memoria dentro de un servicio Spring. Como los
+    servicios de Spring suelen ser singleton, esa lista es compartida por todas las peticiones y todos los usuarios.
+    Este planteamiento puede funcionar en una demostracion o en una aplicacion de uso muy limitado, pero no es una base
+    solida para un entorno multiusuario.
+</p>
+<p>
+    El principal riesgo es la concurrencia: si dos usuarios generan informes al mismo tiempo, una lista no protegida
+    puede comportarse de forma incorrecta. Ademas, todos los informes se pierden cuando la aplicacion se reinicia. La
+    solucion mas completa seria crear una entidad de informe y persistirla en base de datos. Si se busca una solucion
+    temporal, al menos deberia protegerse la coleccion con una estructura thread-safe o con sincronizacion explicita.
+</p>
+<p>
+    Persistir los informes no solo resuelve problemas tecnicos, sino que tambien mejora la utilidad funcional de la
+    aplicacion. Permite consultar historicos, auditar que informes se generaron y mantener la informacion aunque el
+    servidor se detenga o se despliegue una nueva version.
+</p>
+
+<h3>3.7. Anadir indices compuestos para las consultas principales</h3>
+<p>
+    La tabla de mediciones ya incluye indices sobre algunas columnas relevantes, como el tipo de medicion y la fecha.
+    Sin embargo, muchas consultas reales no filtran solo por una columna, sino por una combinacion de tipo de medicion
+    y rango temporal. Este patron aparece en graficos por fecha, calculos de resumen y futuros informes por periodo.
+</p>
+<p class="path">
+    Referencia: backend/main/resources/db/migration/V5__create_measurements.sql
+</p>
+<p>
+    Por ese motivo, conviene evaluar la creacion de un indice compuesto sobre measurement_type_id y timestamp. Este
+    tipo de indice ayuda especialmente cuando la consulta necesita localizar primero un tipo de medicion concreto y,
+    dentro de ese subconjunto, recorrer un intervalo de fechas. Antes de aplicarlo definitivamente, seria recomendable
+    validar con EXPLAIN que MySQL lo utiliza en las consultas mas importantes.
+</p>
+<p>
+    Esta mejora no cambia la logica de negocio, pero puede tener un impacto apreciable cuando el numero de mediciones
+    aumenta. Es una optimizacion de infraestructura de datos: pequena en codigo, pero importante para mantener tiempos
+    de respuesta razonables en consultas frecuentes.
+</p>
+
+<h3>3.8. Limpiar dependencias y codigo no usado</h3>
+<p>
+    Tambien se detectan pequenos elementos de codigo que no aportan comportamiento real, como dependencias inyectadas
+    que no se utilizan o restos de clases asociadas a migraciones anteriores. Este tipo de detalle no suele ser un
+    problema de rendimiento, pero si afecta a la claridad del proyecto. Cuando una clase declara dependencias que no
+    usa, resulta mas dificil entender cual es su responsabilidad real.
+</p>
+<p>
+    La mejora consiste en hacer una limpieza controlada de servicios, controladores, imports y carpetas auxiliares.
+    En particular, conviene revisar el material de backend/test/migracion para decidir si forma parte de una migracion
+    pendiente, si debe conservarse como referencia documental o si ya no tiene sentido dentro del proyecto. Esta revision
+    debe hacerse con cuidado para no eliminar informacion util, pero el objetivo final deberia ser reducir ambiguedad.
+</p>
+<p>
+    Un codigo mas limpio facilita futuras optimizaciones, porque permite distinguir con mas rapidez que piezas siguen
+    activas y cuales son historicas. Aunque esta mejora no sea la mas urgente, contribuye directamente a la mantenibilidad
+    general del sistema.
+</p>
+
+<h3>3.9. Normalizar estados de carga y errores en el frontend</h3>
+<p>
+    En el frontend se repiten varios patrones de carga, gestion de errores y actualizacion de datos. En el dashboard,
+    por ejemplo, existen varias funciones muy parecidas que activan un estado de carga, llaman a una API, actualizan
+    una parte del estado y capturan errores. Esta repeticion todavia es manejable, pero puede crecer rapidamente si se
+    incorporan nuevos graficos, filtros o pantallas.
+</p>
+<p>
+    La recomendacion no es crear abstracciones antes de tiempo, sino normalizar primero los casos mas repetidos. Por
+    ejemplo, se puede centralizar la lectura de mensajes de error del backend o crear pequeños hooks para operaciones
+    de carga que sigan exactamente el mismo patron. Esto permitiria que paginas como dashboard, informes y usuarios
+    compartan una forma comun de tratar estados asincronos.
+</p>
+<p>
+    El resultado seria un frontend mas facil de mantener y menos propenso a estados inconsistentes. Ademas, el usuario
+    recibiria mensajes de error mas coherentes entre pantallas, lo que mejora la experiencia general sin necesidad de
+    modificar la funcionalidad principal.
+</p>
+
+<h2>4. Roadmap sugerido</h2>
+<table>
+    <thead>
+    <tr>
+        <th>Fase</th>
+        <th>Objetivo</th>
+        <th>Resultado esperado</th>
+    </tr>
+    </thead>
+    <tbody>
+    <tr>
+        <td>Fase 1</td>
+        <td>Optimizar carga inicial del dashboard</td>
+        <td>Menos consultas SQL, menos peticiones HTTP y carga inicial mas rapida</td>
+    </tr>
+    <tr>
+        <td>Fase 2</td>
+        <td>Rehacer calculo de informes sobre MySQL</td>
+        <td>Informes consistentes con el dashboard y preparados para mas volumen</td>
+    </tr>
+    <tr>
+        <td>Fase 3</td>
+        <td>Persistir informes y revisar concurrencia</td>
+        <td>Soporte correcto para multiples usuarios y reinicios de la aplicacion</td>
+    </tr>
+    <tr>
+        <td>Fase 4</td>
+        <td>Medir y ajustar indices</td>
+        <td>Consultas por tipo y fecha optimizadas con evidencia de EXPLAIN</td>
+    </tr>
+    <tr>
+        <td>Fase 5</td>
+        <td>Limpieza y refino de frontend</td>
+        <td>Menos duplicacion, mejor manejo de errores y codigo mas mantenible</td>
+    </tr>
+    </tbody>
+</table>
+
+<h2>5. Criterios para validar que la optimizacion funciona</h2>
+<ul>
+    <li>La carga inicial del dashboard debe requerir menos peticiones desde el navegador.</li>
+    <li>El resumen del dashboard debe reducir el numero de consultas SQL agregadas.</li>
+    <li>Los datos de informes y dashboard deben coincidir al consultar el mismo periodo.</li>
+    <li>La generacion simultanea de informes no debe producir errores ni resultados mezclados.</li>
+    <li>Las consultas principales deben usar indices adecuados segun EXPLAIN.</li>
+    <li>El codigo eliminado o simplificado no debe cambiar el comportamiento visible de la aplicacion.</li>
+</ul>
+
+<h2>6. Conclusion</h2>
+<p>
+    La aplicacion ya tiene una separacion razonable entre controlador, servicio, repositorio y frontend, pero el flujo
+    del dashboard y los informes todavia puede optimizarse bastante. El mayor retorno se obtiene agrupando datos en el
+    backend, reduciendo peticiones iniciales y eliminando la doble fuente de verdad entre MySQL y CSV/cache.
+</p>
+<p>
+    El enfoque recomendado es incremental: primero optimizar el dashboard sin cambiar su comportamiento visible,
+    despues migrar los informes a consultas sobre MySQL, y finalmente reforzar persistencia, concurrencia e indices.
+</p>
+</body>
+</html>
